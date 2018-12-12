@@ -9,23 +9,6 @@
 #include <NetworkManagerStructs.h>
 #include <MQTTTasks.h>
 
-/*
-TODO
-mcount = TaskMain->returnCurrentIterator();
-  durch
-    setCurrentIteratorforIterations()
-
-tmp_mess = TaskMain->getBetween(mcount, mcount2);
-for (int i = 1; i < tmp_mess[0].level ; i++)
-  durch
-    ... = iterateAndDoMessages();
-
-
-setStartforIterations(mcount);
-setCurrentIteratorforIterations();
-iterateAndDoMessages();
-*/
-
 // ===================================== Global Variables =====================================
 MQTTTasks *TaskMain;                                  // filled in NetworkManager.cpp, used for saving incoming Messages, FIFO order
 NetworkManager *mNetwP;                               // used for usign NetworkManager access outside setup()
@@ -48,7 +31,7 @@ enum status_main // stores main status for Program run (main.cpp)
 int mcount = 0; // needed for number of messages received, lower num
 int mcount2 = 0;
 status_main stat = status_main::status_isEmpty;
-bool toNextStatus = true; // true if changing state, false if staying in state, it's enshuring that certain code will only run once
+bool toNextStatus = true;         // true if changing state, false if staying in state, it's enshuring that certain code will only run once
 void (*myFuncToCall)() = nullptr; // func to call in main-loop, for finite state machine
 unsigned long currentMillis = 0;  // will store current time
 unsigned long previousMillis = 0; // will store last time
@@ -140,7 +123,9 @@ void publishLevel() // publishes SmartBox Level
     mNetwP->subscribe("Vehicle/+/params");
     mNetwP->subscribe("Vehicle/+/ack");
     hasAnswered = false;
-    mcount = TaskMain->returnCurrentIterator();
+    // mcount = TaskMain->returnCurrentIterator();
+    if (!TaskMain->setCurrentIteratorforIterations())
+      LOG2("setting current iterator failed");
     toNextStatus = false;
     previousMillis = millis();
   }
@@ -189,27 +174,35 @@ void getOptimalVehiclefromResponses() // gets Vehicle with best Params due to ca
     hasAnswered = false;
     mNetwP->loop();
     mcount2 = TaskMain->returnCurrentIterator(); // needed for number of messages received, upper num
-    tmp_mess = TaskMain->getBetween(mcount, mcount2);
-    for (int i = 1; i < tmp_mess[0].level; i++)
+    bool whileBool = true;
+    // tmp_mess = TaskMain->getBetween(mcount, mcount2);
+    //for (int i = 1; i < tmp_mess[0].level; i++)
+    while (whileBool)
     {
-      String *ttop = TaskMain->returnMQTTtopics(tmp_mess[i]);
-      if (ttop == nullptr)
-        LOG1("no topics found, function returnMQTTtopics failed to return topics");
-      // LOG3("received Topics: " + ttop[0] + ", " + ttop[1] + ", " + ttop[2]); // could be uncommented for debugging
-      if ((ttop[0] == "Vehicle") && (ttop[2] == "params")) // if in MQTT topic == Vehicle/+/params
+      myJSONStr taskNow = TaskMain->iterateAndDoMessages();
+      if (!taskNow.level == -5) // otherwise its default struct, which is not to be proceeded!
       {
-        hasAnswered = true;
-        LOG3("has answered, calculating Optimum for: " + ttop[1]);
-        double opt = calcOptimum(tmp_mess[i]);
-        if (value_max[0] < opt)
+        String *ttop = TaskMain->returnMQTTtopics(taskNow);
+        if (ttop == nullptr)
+          LOG1("no topics found, function returnMQTTtopics failed to return topics");
+        // LOG3("received Topics: " + ttop[0] + ", " + ttop[1] + ", " + ttop[2]); // could be uncommented for debugging
+        if ((ttop[0] == "Vehicle") && (ttop[2] == "params")) // if in MQTT topic == Vehicle/+/params
         {
-          value_max[1] = value_max[0];
-          hostname_max[1] = hostname_max[0];
-          value_max[0] = opt;
-          hostname_max[0] = tmp_mess[i].hostname;
+          hasAnswered = true;
+          LOG3("has answered, calculating Optimum for: " + ttop[1]);
+          double opt = calcOptimum(taskNow);
+          if (value_max[0] < opt)
+          {
+            value_max[1] = value_max[0];
+            hostname_max[1] = hostname_max[0];
+            value_max[0] = opt;
+            hostname_max[0] = taskNow.hostname;
+          }
+          // else case not needed, two best hostnames are enough
         }
-        // else case not needed, two best hostnames are enough
       }
+      else
+        whileBool = false;
     }
   }
   toNextStatus = true;
@@ -234,7 +227,9 @@ void hasOptVehiclePublish() // publishes decision for vehicle to transport Smart
     LOG1("-.-.-.- publish decision for Vehicle -.-.-.-");
     LOG3("entering new state: hasOptVehiclePublish");
     toNextStatus = false;
-    mcount = TaskMain->returnCurrentIterator();
+    // mcount = TaskMain->returnCurrentIterator();
+    if (!TaskMain->setCurrentIteratorforIterations())
+      LOG2("setting current iterator failed");
     previousMillis = millis();
   }
   if (hasAnswered)
@@ -267,7 +262,9 @@ void hasOptVehiclePublish() // publishes decision for vehicle to transport Smart
         toNextStatus = true;
         stat = status_main::status_checkIfAckReceived;
         myFuncToCall = checkIfAckReceivedfromResponses;
-        mcount = TaskMain->returnCurrentIterator();
+        if (!TaskMain->setCurrentIteratorforIterations())
+          LOG2("setting current iterator failed");
+        // mcount = TaskMain->returnCurrentIterator();
         mNetwP->loop();
         previousMillis = millis();
         while (((currentMillis - previousMillis) / 1000 < waitSeconds1) && (showCase))
@@ -308,17 +305,25 @@ void checkIfAckReceivedfromResponses() // runs until acknoledgement of desired V
   }
   else
   {
-    for (int i = 1; i < tmp_mess[0].level; i++)
+    bool whileBool = true;
+    //for (int i = 1; i < tmp_mess[0].level; i++)
+    while (whileBool)
     {
-      String *ttop = TaskMain->returnMQTTtopics(tmp_mess[i]);
-      if (ttop == nullptr)
-        LOG1("no topics found, function returnMQTTtopics failed to return topics");
-      // LOG3("ttop[0]: " + ttop[0] + "\t ttop[1]: " + ttop[1] + "\t ttop[2]: " + ttop[2] + "\t tmp_mess[i].hostname: " + tmp_mess[i].hostname);                        // could be uncommented for debugging
-      if ((ttop[0] == "Vehicle") && (ttop[1] == hostname_max[0]) && (ttop[2] == "ack") && (hasAnswered == false) && (tmp_mess[i].hostname == mNetwP->getHostName())) // if desired Vehicle answered
+      myJSONStr taskNow = TaskMain->iterateAndDoMessages();
+      if (!taskNow.level == -5) // otherwise its default struct, which is not to be proceeded!
       {
-        hasAnswered = true;
-        LOG3("right Vehicle has answered and send acknoledgement to transport it");
+        String *ttop = TaskMain->returnMQTTtopics(taskNow);
+        if (ttop == nullptr)
+          LOG1("no topics found, function returnMQTTtopics failed to return topics");
+        // LOG3("ttop[0]: " + ttop[0] + "\t ttop[1]: " + ttop[1] + "\t ttop[2]: " + ttop[2] + "\t taskNow.hostname: " + taskNow.hostname);                        // could be uncommented for debugging
+        if ((ttop[0] == "Vehicle") && (ttop[1] == hostname_max[0]) && (ttop[2] == "ack") && (hasAnswered == false) && (taskNow.hostname == mNetwP->getHostName())) // if desired Vehicle answered
+        {
+          hasAnswered = true;
+          LOG3("right Vehicle has answered and send acknoledgement to transport it");
+        }
       }
+      else
+        whileBool = false;
     }
     if (hasAnswered) // if right Vehicle answered, go next
     {
@@ -363,7 +368,9 @@ void checkIfTransporedfromResponses() // runs until SmartBox is transpored, emti
     LOG3("entering new state: checkIfTransporedfromResponses");
     toNextStatus = false;
     hasAnswered = false;
-    mcount = TaskMain->returnCurrentIterator();
+    if (!TaskMain->setCurrentIteratorforIterations())
+      LOG2("setting current iterator failed");
+    // mcount = TaskMain->returnCurrentIterator();
   }
   mNetwP->loop();
   mcount2 = TaskMain->returnCurrentIterator();
@@ -376,19 +383,27 @@ void checkIfTransporedfromResponses() // runs until SmartBox is transpored, emti
   else
   {
     LOG3("now im here");
-    for (int i = 1; i < tmp_mess[0].level; i++)
+    bool whileBool = true;
+    //for (int i = 1; i < tmp_mess[0].level; i++)
+    while (whileBool)
     {
-      String *ttop = TaskMain->returnMQTTtopics(tmp_mess[i]);
-      if (ttop == nullptr)
-        LOG1("no topics found, function returnMQTTtopics failed to return topics");
-      // LOG3("ttop[0]: " + ttop[0] + "\t ttop[1]: " + ttop[1] + "\t ttop[2]: " + ttop[2] + "\t tmp_mess[i].request:" + tmp_mess[i].request);                          // could be uncommented for debugging
-      if ((ttop[0] == "Vehicle") && (ttop[1] == hostname_max[0]) && (ttop[2] == "ack") && (hasAnswered == false) && (tmp_mess[i].request == mNetwP->getHostName())) // if desired Vehicle answered
+      myJSONStr taskNow = TaskMain->iterateAndDoMessages();
+      if (!taskNow.level == -5) // otherwise its default struct, which is not to be proceeded!
       {
-        hasAnswered = true;
-        LOG2("right Vehicle has answered and sent transported acknoledgement");
+        String *ttop = TaskMain->returnMQTTtopics(taskNow);
+        if (ttop == nullptr)
+          LOG1("no topics found, function returnMQTTtopics failed to return topics");
+        // LOG3("ttop[0]: " + ttop[0] + "\t ttop[1]: " + ttop[1] + "\t ttop[2]: " + ttop[2] + "\t taskNow.request:" + taskNow.request);                          // could be uncommented for debugging
+        if ((ttop[0] == "Vehicle") && (ttop[1] == hostname_max[0]) && (ttop[2] == "ack") && (hasAnswered == false) && (taskNow.request == mNetwP->getHostName())) // if desired Vehicle answered
+        {
+          hasAnswered = true;
+          LOG2("right Vehicle has answered and sent transported acknoledgement");
+        }
+        else
+          LOG3("not the right answer");
       }
       else
-        LOG3("not the right answer");
+        whileBool = false;
     }
     if (hasAnswered) // if Vehicle is transported, since transported and brought back to factory unsubsribe (is empty again)
     {
